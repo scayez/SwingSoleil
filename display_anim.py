@@ -4,6 +4,7 @@ from IPython.display import clear_output
 import numpy as np
 from matplotlib import pyplot as plt
 from matplotlib.animation import FuncAnimation
+import matplotlib.patches as patches
 
 def load_numpy_files_with_names(folder):
     """Charge tous les fichiers numpy d'un dossier spécifique avec leurs noms."""
@@ -65,6 +66,8 @@ def visualize_images_and_integration_animation(images_with_names, qh_list, ih_li
 
     # Subplot (1, 0): Image Basler
     im_basler = axs[1, 0].imshow(basler_images_with_names[0][0], cmap='gray')
+    rect = patches.Rectangle((269, 290), 52, 38, linewidth=1, edgecolor='r', facecolor='none')
+    axs[1, 0].add_patch(rect)
     axs[1, 0].axis('off')
 
     # Subplot (1, 1): Coordonnées (x, z) avec point rouge
@@ -87,6 +90,7 @@ def visualize_images_and_integration_animation(images_with_names, qh_list, ih_li
         im_basler.set_data(basler_images_with_names[frame][0])
         point.set_data(positions[frame][0], positions[frame][1])
         # point.set_data(positions[frame][0], positions[frame][2])  # Ajouter y pour le point (x, y, z)
+        rect.set_xy((269, 290))  # Set the position of the rectangle
         print(f"File {frame} on {len(images_with_names)} : {images_with_names[frame][1]}")
         clear_output(wait=True)
         return im, line1, line2, im_basler, point
@@ -115,6 +119,8 @@ def visualize_images_and_integration_animation_no_display(images_with_names, qh_
 
     # Subplot (1, 0): Image Basler
     im_basler = axs[1, 0].imshow(basler_images_with_names[0][0], cmap='gray')
+    rect = patches.Rectangle((269, 290), 52, 38, linewidth=1, edgecolor='r', facecolor='none')
+    axs[1, 0].add_patch(rect)
     axs[1, 0].axis('off')
 
     # Subplot (1, 1): Coordonnées (x, z) avec point rouge
@@ -137,6 +143,7 @@ def visualize_images_and_integration_animation_no_display(images_with_names, qh_
         im_basler.set_data(basler_images_with_names[frame][0])
         point.set_data(positions[frame][0], positions[frame][1])
         # point.set_data(positions[frame][0], positions[frame][2])  # Ajouter y pour le point (x, y, z)
+        rect.set_xy((269, 290))  # Set the position of the rectangle
         plt.close()  # Fermer la figure après chaque mise à jour pour éviter l'accumulation des figures en mémoire
         print(f"File {frame} on {len(images_with_names)} : {images_with_names[frame][1]}")
         clear_output(wait=True)
