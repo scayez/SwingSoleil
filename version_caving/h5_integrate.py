@@ -273,7 +273,7 @@ def caving(data,params,maskfile):
     
     output='no mask pixels found'
     tag=10000000.0
-    tag=-1.0
+    
     for y in np.arange(nbre_colonnes):
         for x in np.arange(nbre_lignes):
             # tag masked pixels with negative value
@@ -297,9 +297,9 @@ def caving(data,params,maskfile):
                 
                 #if cave_data[y,x] == -1 and cave_data[ysym,xsym] != -1: 
                 if cave_data[y,x] == tag :
-                    print('=-1')
+                   
                     if cave_data[ysym,xsym] != tag:
-                        print('value changed')  
+                        
                         cave_data[y,x]=cave_data[ysym,xsym]
                         caving_mask_data[y,x] = 0
 
