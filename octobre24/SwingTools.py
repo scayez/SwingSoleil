@@ -8,6 +8,7 @@ from IPython.display import clear_output
 from matplotlib import pyplot as plt
 import pandas as pd
 import shutil
+import logging
 
 def extract_from_h5( filename,
                     print_output: bool = False,             
@@ -169,6 +170,7 @@ def save_exported_data(file,sample_name=None, eiger=None, basler_image=None, pos
     wl = params["WaveLength"]
     nbins = 1000            #??????????????
     unit_type = "q_A^-1"     #??????????????
+
    
     #Create folder for all data with sample name and the n°
     output_base = '/'+os.path.basename(file).replace('.h5', '')
@@ -258,9 +260,8 @@ def save_exported_data(file,sample_name=None, eiger=None, basler_image=None, pos
         np.save(os.path.join(integration_dir+ output_base + '_integration_mean.npy'), integration_col)
         header = "q_iso   i_iso"
         np.savetxt(os.path.join(integration_dir+ output_base + '_integration_mean.txt'), integration_col,header = header , fmt='%.6f')
-        plot_integration(integration,eiger_mean,sample_name ,data_folder=data_dir , plot=False , save_path = os.path.join(integration_dir))
-        #plot_integration(integration,eiger_mean,sample_name ,data_folder=data_dir , plot=False , save_path = integration_dir)
-       # print(output_base+'--> Integration')
+        #plot_integration(integration,eiger_mean,sample_name ,data_folder=data_dir , plot=False , save_path = os.path.join(integration_dir))
+        save_images(data_dir,file,integration,eiger_mean, basler_image,integration_dir, eiger_dir,basler_dir, sample_name)
     clear_output(wait=True)
 
 def integrate(image,params, maskfile=None ):
@@ -387,15 +388,63 @@ def plot_integration(integration,image, sample_name=None, time_stamps=None, data
 
 
 
+def save_images(data_dir,file, integration,eiger_mean, basler_image,integration_dir, eiger_dir,basler_dir, sample_name=None):
+    
+    file_num = file.split('rodriguez_')[1]
+    file_num = file_num.split('_2024')[0]
+
+    basler_X0 = 70
+    basler_Z0 = 309
+    figsize = (8,8)
+    fig1, ax1 = plt.subplots( figsize=figsize)
+    ax1.imshow(np.log1p(eiger_mean),cmap='jet')
+
+    fig2, ax2 = plt.subplots(figsize=figsize)
+    ax2.imshow(basler_image,cmap='gray')
+    ax2.scatter(basler_X0, basler_Z0, s = 2000, marker = '+', color = 'r', linewidths=2)
+
+    
+
+    if sample_name is not None:
+        if data_dir is not None:
+            if data_dir[-1] == '/':
+                title = data_dir.split('/')[-2] + '_' + sample_name
+            else:
+                title = data_dir.split('/')[-1] + '_' + sample_name        
+        else:
+            title = sample_name
+    else:
+        title = 'SAXS'
+
+    fig1.suptitle(title)
+    fig1.savefig(eiger_dir+'/'+'@eiger@'+sample_name+'@'+file_num+'.png' )  
+    plt.close(fig1)
+    
+    fig2.suptitle(title)
+    fig2.savefig(basler_dir+'/'+'@basler@'+sample_name+'@'+file_num+'.png' )  
+    plt.close(fig2)
+
+
+
+
+
+
 def create_info_file(directory):
+
+    log_file_path = os.path.join(directory, 'error_log.txt')
+                            
     # Create a list to store the data
     data_list = []
     file_count = 0
     list_error = []
-    #total_files = sum(len(files) for _, _, files in os.walk(directory))
-    #for root, dirs, files in os.walk(directory):
+    # Check if directory exists
+    if not os.path.isdir(directory):
+        with open(log_file_path, 'w') as f:
+            f.write(f"Directory not found: {directory}\n")
+        return None, None
+
     files = os.listdir(directory)
-    total_files = len(files)
+    total_files = len([file for file in os.listdir(directory) if file.endswith('.h5')])
     for file in files:
         if file.endswith('.h5'):
             file_count += 1
@@ -408,10 +457,14 @@ def create_info_file(directory):
                 # Append a new element to the list
                 data_list.append((file_name, sample_name, transmission))
                 print(f'Processing file n° {file_count} on {total_files}')
+                print(sample_name)
                 clear_output(wait=True)
+            except FileNotFoundError as e:
+                list_error.append(f"File not found: {file} - {str(e)}")
+            except ValueError as e:
+                list_error.append(f"Value error in file {file}: {str(e)}")
             except Exception as e:
-                list_error.append(file)
-                print('Error on', file, ":", e)
+                list_error.append(f"Unexpected error with file {file}: {str(e)}")
 
                # Create a DataFrame from the list
     df = pd.DataFrame(data_list, columns=['File', 'Sample name', 'Mean Transmission'])
@@ -475,7 +528,12 @@ def create_info_file(directory):
     # Save DataFrame to CSV file
     df.to_csv(directory+'/_samples_ref.csv', index=False)
     merged.to_csv(directory+'/_samples_ref_associated.csv', index=False)
-    print('Error on: ',list_error)
+    # Print errors at the end
+   # Save errors to the text file
+
+    with open(log_file_path, 'a') as f:
+        for error in list_error:
+            f.write(error + '\n')
     return df, merged
 
 def batch_convert(data_folder,maskfile):
@@ -526,3 +584,144 @@ def batch_convert(data_folder,maskfile):
                 # Copy the file to the destination folder
                 shutil.copy(file_path, plot_folder)
 
+def  integration_correction(folder,asso,maskfile,coef):
+    """
+    Perform integration correction for sample and reference data based on provided coefficients.
+    This function processes each row in the provided association DataFrame (`asso`), extracting sample 
+    and reference data, performing integration, applying corrections, and saving the results to specified 
+    directories. It generates plots for the integrated data and positions.
+    Parameters:
+    - asso (DataFrame): A pandas DataFrame containing association information with columns:
+        - "File_sample": The filename of the sample data.
+        - "File_ref": The filename of the reference data.
+        - "Position": The position of the sample.
+        - "Channel": The channel number associated with the sample.
+    - maskfile (str): The path to the mask file used for integration.
+    - coef (float): The coefficient used to apply correction to the integrated intensity.
+    Returns:
+    - None: The function saves the processed data and plots to the filesystem and does not return any values.
+    Process:
+    1. Iterates over each row in the `asso` DataFrame.
+    2. Extracts data for the sample and its associated reference using the `extract` function.
+    3. Performs integration on the extracted data using the `integ` function.
+    4. Applies a correction to the integrated intensity using the provided coefficient.
+    5. Creates directories for saving results if they do not exist.
+    6. Saves the integrated data and corrected data as both NumPy arrays and text files.
+    7. Generates and saves plots for the integrated data and positions.
+    Example:
+    maskfile = 'mask.edf'
+    coef = 0.0181 
+    integration_correction(asso,maskfile,coef)
+    """
+    for index, row in asso.iterrows(): 
+        sample_file = str(row["File_sample"])
+        ref_file = str(row["File_ref"])
+        sample_path = folder+'/'+sample_file
+        ref_path = folder+'/'+ref_file
+        output_base = '/'+os.path.basename(sample_file).replace('.h5', '')
+
+        #extract data for sample and associated reference
+        sample_name, sample_eiger, sample_eiger_mean, sample_basler_image, sample_position, sample_params, sample_time_stamps, sample_transmission = extract_from_h5(sample_path,print_output=False)
+        ref_name, ref_eiger, ref_eiger_mean, ref_basler_image, ref_position, ref_params, ref_time_stamps, ref_transmission = extract_from_h5(ref_path,print_output=False)
+        #Do integration
+        sample_integration_mean = integrate(sample_eiger_mean,sample_params,maskfile)
+        ref_integration_mean = integrate(ref_eiger_mean,ref_params,maskfile)
+
+        sample_q_iso = sample_integration_mean[0]
+        sample_i_iso = sample_integration_mean[1]
+
+        ref_q_iso = ref_integration_mean[0]
+        ref_i_iso = ref_integration_mean[1]
+
+        #apply correction
+        corr_i_iso = coef*((sample_i_iso/np.mean(sample_transmission))-(ref_i_iso/np.mean(ref_transmission)))
+
+        # Create a new directory with the sample name
+        file_num = sample_file.split('rodriguez_')[1].split('_')[0]
+        sample_dir = os.path.join(folder, sample_name+'_'+file_num)
+        if not os.path.exists(sample_dir):
+            os.makedirs(sample_dir)
+
+        # Create a new directory for integration correction inside sample_dir
+        integration_corr_dir = os.path.join(sample_dir, 'integration_corr')
+        if not os.path.exists(integration_corr_dir):
+            os.makedirs(integration_corr_dir)
+
+         # define directory for position plot
+        position_dir = os.path.join(sample_dir, 'positions')
+        if not os.path.exists(position_dir):
+            os.makedirs(position_dir)
+
+
+        #save to files
+        sample_integration_col = np.column_stack(( sample_q_iso,  sample_i_iso))
+        ref_integration_col = np.column_stack((ref_q_iso, ref_i_iso))
+        corr_integration_col = np.column_stack((sample_q_iso, corr_i_iso))
+
+        # np.save(os.path.join(integration_corr_dir, f'sample_integration_{sample_name}.npy'), sample_integration_col)
+        # np.save(os.path.join(integration_corr_dir, f'ref_integration_{sample_name}.npy'), ref_integration_col)
+        # np.save(os.path.join(integration_corr_dir, f'corr_integration_{sample_name}.npy'), corr_integration_col)
+        np.save(integration_corr_dir+output_base+'_sample_integration_'+sample_name+'.npy', sample_integration_col)
+        np.save(integration_corr_dir+output_base+ '_ref_integration_'+sample_name+'.npy', ref_integration_col)
+        np.save(integration_corr_dir+output_base+ '_corr_integration_'+sample_name+'.npy', corr_integration_col)
+        
+        #plt.savefig(integration_corr_dir+output_base+'_integr_corr_'+sample_name+'.png')
+
+
+        header = "sample_q_iso   sample_i_iso"
+        np.savetxt(integration_corr_dir+output_base+'_sample_integration_'+sample_name+'.txt', sample_integration_col,header = header , fmt='%.6f')
+        #np.savetxt(os.path.join(integration_corr_dir, f'sample_integration_{sample_name}.txt'), sample_integration_col,header = header , fmt='%.6f')
+        header = "ref_q_iso   ref_i_iso"
+        np.savetxt(integration_corr_dir+output_base+ '_ref_integration_'+sample_name+'.txt', ref_integration_col,header = header , fmt='%.6f')
+        #np.savetxt(os.path.join(integration_corr_dir, f'ref_integration_{sample_name}.txt'), ref_integration_col,header = header , fmt='%.6f')
+        header = "corr_q_iso   corr_i_iso"
+        np.savetxt(integration_corr_dir+output_base+ '_corr_integration_'+sample_name+'.txt', corr_integration_col,header = header , fmt='%.6f')
+        #np.savetxt(os.path.join(integration_corr_dir, f'corr_integration_{sample_name}.txt'), corr_integration_col,header = header , fmt='%.6f')
+
+        ###############SAVE INTEGRATION COR PLOT###############
+        figsize = (8,8)
+        fig,ax = plt.subplots(figsize=figsize )
+        ax.loglog(sample_q_iso, sample_i_iso, label='Sample I_iso', color='lightblue', linestyle=':')
+        ax.loglog(ref_q_iso, ref_i_iso, label='Ref I_iso', color='lightgreen', linestyle=':')
+        ax.loglog(sample_q_iso, corr_i_iso, label='Corr I_iso', color='red', linestyle='-')
+        # Add labels and title
+        ax.set_xlabel('q_iso')
+        ax.set_ylabel('I_iso')
+        ax.set_title(f' {sample_name}')
+        ax.legend()
+        # Save the figure
+        # plt.savefig(os.path.join(integration_corr_dir, f'plot_iteration_{sample_name}.png'))
+        plt.savefig(integration_corr_dir+'/'+'@corr_integration_@'+sample_name+'@'+file_num+'.png')
+        print(integration_corr_dir+'/'+'@corr_integration_@'+sample_name+'@'+file_num+'.png')
+        plt.close(fig)  # Close the figure to free up memory
+
+         #save all other files
+        save_exported_data(sample_path,sample_name, sample_eiger, sample_basler_image, sample_position, sample_params, 
+                       sample_time_stamps, sample_transmission, sample_integration_mean ,maskfile)
+        ###############SAVE POSITIONS PLOT###############
+        fig,ax = plt.subplots(figsize=figsize )
+        # Clear the plot to start fresh in each iteration
+        ax.clear()   
+        #fig.patch.set_facecolor('black')  # Black background for figure
+        ax.set_facecolor('lightgrey')  # Black background for axes
+        # Set labels and title
+        ax.set_xlabel('Position')
+        ax.set_ylabel('Channel')
+        ax.set_ylim(0, 3)
+        ax.set_yticks([1, 2])
+        x_min = int(asso['Position'].min())
+        x_max = int(asso['Position'].max())
+        ax.set_xticks(np.arange(x_min, x_max + 1, 1))  # Set step of 1 for x-axis ticks
+        ax.axhline(y=1, color='black',  linewidth=50,zorder=1)
+        ax.axhline(y=2, color='black',  linewidth=50,zorder=1)
+        # Plot all points in blue (ensures all data is always visible)
+        ax.scatter(asso['Position'], asso['Channel'],marker='+', color='yellow',s = 100, zorder=2)
+        # Plot the current point in red and bigger
+        ax.scatter(row['Position'], row['Channel'], marker='*',color='red', s=1400, zorder=2)
+        # Save the current plot as an image
+        #plt.savefig(os.path.join(position_dir, f'plot_position_{sample_name}.png'))
+        plt.savefig(position_dir+'/'+'@pos_@'+sample_name+'@'+file_num+'.png')
+        print(position_dir+'/'+'@pos_@'+sample_name+'@'+file_num+'.png')
+        plt.close()
+    
+        print(f'File: {index+1} on {len(asso)} ')
