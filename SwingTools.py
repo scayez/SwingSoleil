@@ -95,12 +95,17 @@ def extract_from_h5( filename,
         nb_frames=f[target+'/nb_frames'][0]
         bin_x=f[target+'/binning_x'][0]
         bin_y=f[target+'/binning_y'][0]
+        exposure_time = f[target+'/exposure_time'][0]
         target = group + '/SWING/i11-c-c03__op__mono'
         wl = f[target + '/wavelength'][0]
 
+
+        target = group + '/scan_data/averagemi8b'
+        averagemi8b = np.mean(np.array(f[target]))
+
         params={"Sample_Name":str(sample_name),"WaveLength":float(wl),"Center_1":float(x_center),"Center_2":float(z_center),"PixSize_x":float(pixel_size_x),"PixSize_z":float(pixel_size_z),
-            "SampleDistance":float(distance_m),"Dim_1":int(eiger.shape[1]),"Dim_2":int(eiger.shape[2]),
-            "ExposureTime":1,'Binning_1':int(bin_x),'Binning_2':int(bin_y),'nb_frames':int(nb_frames)}
+            "SampleDistance":float(distance_m),"Dim_1":int(eiger.shape[1]),"Dim_2":int(eiger.shape[2]),'Binning_1':int(bin_x),'Binning_2':int(bin_y),'nb_frames':int(nb_frames),
+            "exposure_time":int(exposure_time),"averagemi8b":averagemi8b}
                
         # Retrieve Time Stamps
         target = group + '/scan_data/eiger_timestamp'
@@ -169,8 +174,8 @@ def save_exported_data(file,sample_name=None, eiger=None, basler_image=None, pos
     x_center = params["Center_1"]
     z_center = params["Center_2"]
     wl = params["WaveLength"]
-    nbins = 1000            #??????????????
-    unit_type = "q_A^-1"     #??????????????
+    nbins = 1000            #nbre de points en q
+    unit_type = "q_A^-1"     #unité des q
 
    
     #Create folder for all data with sample name and the n°
@@ -319,6 +324,8 @@ def integrate(image,params, maskfile=None ):
     x_center = params['Center_1']
     z_center = params['Center_2']
     wl = params['WaveLength']
+    mi8 = params['averagemi8b']
+    time = params['exposure_time']
 
     nbins = 1000            #nb  de points
     unit_type = "q_A^-1"    #unité q
@@ -338,8 +345,14 @@ def integrate(image,params, maskfile=None ):
         # Perform the integration with the mask applied
         q_iso,i_iso=ai.integrate1d(image,nbins,unit=unit_type,normalization_factor=1,mask=maskdata)
 
+    # correction with formula = intensity/(time*mi8*30700) with averagemi8b and exposure_time
+    i_iso = i_iso/(time*mi8*30700)##############################################################chang value 30700????????????????????????????
     #return integration containing q_iso, i_iso
     integration = np.array([q_iso,i_iso])
+    
+    
+   
+
     return integration
 
 def plot_integration(integration,image, sample_name=None, time_stamps=None, data_folder=None, plot=False,save_path=None):
@@ -530,7 +543,7 @@ def create_info_file(directory):
     # Merge on Channel and Position
     merged = pd.merge(samples, references, on=['Channel', 'Position'], suffixes=('_sample', '_ref'))
 
-    #Add creercted time column
+    #Add corrercted time column
     merged['Time_ref'] = pd.to_datetime(merged['Time_ref'])
     min_time_ref = merged['Time_ref'].min()
     print(min_time_ref)
@@ -538,6 +551,8 @@ def create_info_file(directory):
     #depasser 24h mais ne pas compter les jours
     merged['Time_ref_adjusted'] =merged['Time_ref_adjusted'].apply(lambda x: str(x).split(' ')[2] if pd.notnull(x) else '00:00:00')
 
+    #add file number column
+    merged['File num.'] = merged['File_ref'].apply(lambda x: x.split('rodriguez_')[1].split('_2024')[0])
 
     # Save DataFrame to CSV file
     df.to_csv(directory+'/_samples_ref.csv', index=False)
@@ -630,6 +645,7 @@ def  integration_correction(folder,asso,maskfile,coef):
     for index, row in asso.iterrows(): 
         sample_file = str(row["File_sample"])
         ref_file = str(row["File_ref"])
+        file_num = str(row['File num.'])
         sample_path = folder+'/'+sample_file
         ref_path = folder+'/'+ref_file
         output_base = '/'+os.path.basename(sample_file).replace('.h5', '')
@@ -646,10 +662,10 @@ def  integration_correction(folder,asso,maskfile,coef):
 
         ref_q_iso = ref_integration_mean[0]
         ref_i_iso = ref_integration_mean[1]
-
-        #apply correction
+#################################################
+        #apply correction 
         corr_i_iso = coef*((sample_i_iso/np.mean(sample_transmission))-(ref_i_iso/np.mean(ref_transmission)))
-        #corr_i_iso = coef*(sample_i_iso-ref_i_iso)
+##################################################    
 
         # Create a new directory with the sample name
         file_num = sample_file.split('rodriguez_')[1].split('_')[0]
@@ -673,27 +689,26 @@ def  integration_correction(folder,asso,maskfile,coef):
         ref_integration_col = np.column_stack((ref_q_iso, ref_i_iso))
         corr_integration_col = np.column_stack((sample_q_iso, corr_i_iso))
 
-        # np.save(os.path.join(integration_corr_dir, f'sample_integration_{sample_name}.npy'), sample_integration_col)
-        # np.save(os.path.join(integration_corr_dir, f'ref_integration_{sample_name}.npy'), ref_integration_col)
-        # np.save(os.path.join(integration_corr_dir, f'corr_integration_{sample_name}.npy'), corr_integration_col)
+     
         np.save(integration_corr_dir+output_base+'_sample_integration_'+sample_name+'.npy', sample_integration_col)
         np.save(integration_corr_dir+output_base+ '_ref_integration_'+sample_name+'.npy', ref_integration_col)
         np.save(integration_corr_dir+output_base+ '_corr_integration_'+sample_name+'.npy', corr_integration_col)
         
-        #plt.savefig(integration_corr_dir+output_base+'_integr_corr_'+sample_name+'.png')
-
+     
 
         header = "sample_q_iso   sample_i_iso"
         np.savetxt(integration_corr_dir+output_base+'_sample_integration_'+sample_name+'.txt', sample_integration_col,header = header , fmt='%.6f')
-        #np.savetxt(os.path.join(integration_corr_dir, f'sample_integration_{sample_name}.txt'), sample_integration_col,header = header , fmt='%.6f')
+       
         header = "ref_q_iso   ref_i_iso"
         np.savetxt(integration_corr_dir+output_base+ '_ref_integration_'+sample_name+'.txt', ref_integration_col,header = header , fmt='%.6f')
-        #np.savetxt(os.path.join(integration_corr_dir, f'ref_integration_{sample_name}.txt'), ref_integration_col,header = header , fmt='%.6f')
+       
         header = "corr_q_iso   corr_i_iso"
         np.savetxt(integration_corr_dir+output_base+ '_corr_integration_'+sample_name+'.txt', corr_integration_col,header = header , fmt='%.6f')
-        #np.savetxt(os.path.join(integration_corr_dir, f'corr_integration_{sample_name}.txt'), corr_integration_col,header = header , fmt='%.6f')
+       
 
         ###############SAVE INTEGRATION COR PLOT###############
+
+        
         figsize = (8,8)
         fig,ax = plt.subplots(figsize=figsize )
         ax.loglog(sample_q_iso, sample_i_iso, label='Sample I_iso', color='lightblue', linestyle=':')
@@ -702,10 +717,10 @@ def  integration_correction(folder,asso,maskfile,coef):
         # Add labels and title
         ax.set_xlabel('q_iso')
         ax.set_ylabel('I_iso')
-        ax.set_title(f' {sample_name}')
+        ax.set_title(sample_name)
         ax.legend()
         # Save the figure
-        # plt.savefig(os.path.join(integration_corr_dir, f'plot_iteration_{sample_name}.png'))
+
         plt.savefig(integration_corr_dir+'/'+'@corr_integration_@'+sample_name+'@'+file_num+'.png')
         print(integration_corr_dir+'/'+'@corr_integration_@'+sample_name+'@'+file_num+'.png')
         plt.close(fig)  # Close the figure to free up memory
@@ -717,24 +732,12 @@ def  integration_correction(folder,asso,maskfile,coef):
         channel_index = row['Channel'] -1 # Get the channel index
         position_index = row['Position']        # Get the position
 
-        # # Set the overall figure size
-        # figsize = (8, 6)  # Adjust the overall size as needed
-        # # Create a gridspec with 2 rows and 1 column
-        # gs = gridspec.GridSpec(2, 1, height_ratios=[1, 1])  # You can adjust the ratios
-        # # Create the figure and axes
-        # fig = plt.figure(figsize=figsize)
-        # ax = [] 
-        # ax.append(fig.add_subplot(gs[0]))  # First subplot
-        # ax.append(fig.add_subplot(gs[1])) 
-        # ax[0] = fig.add_subplot(gs[0])  # First subplot
-        # ax[1] = fig.add_subplot(gs[1])  # Second subplot
-
-        #time = find_time_ref(asso,sample_name)
         
         time = row['Time_ref_adjusted'] 
         time=str(time)
         fig,ax = plt.subplots(2,1, figsize=figsize,facecolor='lightgrey')
-        fig.suptitle(sample_name+'--'+time,color='red', fontsize=18, fontweight='bold')
+        fig.suptitle(sample_name+'-'+time+'-'+file_num, fontsize=18, color='red',  fontweight='bold')
+
 
         # Set background colors
         ax[0].set_facecolor('black')
@@ -762,10 +765,9 @@ def  integration_correction(folder,asso,maskfile,coef):
 
         # Set x-limits to the maximum value of both channels
         max_position = max(channel_1_positions.max(), channel_2_positions.max())
-        ax[0].set_xlim(0, max_position)
-        # ax[1].set_xlim(0, max_position)
+        ax[0].set_xlim(0, max_position)#!!!!! lim 0 ou 1 pour tomber en face???
         ax[1].invert_xaxis()
-        ax[1].set_xlim(max_position, 0)
+        ax[1].set_xlim(max_position, 1) #!!!!! lim 0 ou 1 pour tomber en face???
 
         tick_interval = 2  # Change this to your desired interval
         ticks = np.arange(0, max_position + tick_interval, tick_interval)
@@ -794,48 +796,3 @@ def  integration_correction(folder,asso,maskfile,coef):
         print(f'File: {index+1} on {len(asso)} ')
 
         
-
-
-
-# def find_time_ref(asso_dataframe,sample_name):
-#         filtered_df = asso_dataframe[asso_dataframe['Sample name_sample'] == sample_name]
-#         # Check if any rows were found
-#         if not filtered_df.empty:
-#             # Return the Time_ref values as a list (or you can return a single value if you expect only one match)
-#             return str(filtered_df['Time_ref'].iloc[0])
-#         else:
-#             # If no matching sample name is found, return None or an appropriate message
-#             return None
-
-
-
-
-
-        # fig,ax = plt.subplots(figsize=figsize )
-        # # Clear the plot to start fresh in each iteration
-        # ax.clear()   
-        # #fig.patch.set_facecolor('black')  # Black background for figure
-        # ax.set_facecolor('lightgrey')  # Black background for axes
-        # # Set labels and title
-        # ax.set_xlabel('Position')
-        # ax.set_ylabel('Channel')
-        # ax.set_ylim(0, 3)
-        # ax.set_yticks([1, 2])
-        # x_min = int(asso['Position'].min())
-        # x_max = int(asso['Position'].max())
-        # ax.set_xticks(np.arange(x_min, x_max + 1, 1))  # Set step of 1 for x-axis ticks
-        # ax.axhline(y=1, color='black',  linewidth=50,zorder=1)
-        # ax.axhline(y=2, color='black',  linewidth=50,zorder=1)
-        # # Plot all points in yellow (ensures all data is always visible)
-        # ax.scatter(asso['Position'], asso['Channel'],marker='+', color='yellow',s = 100, zorder=2)
-        # # Plot the current point in red and bigger
-        # ax.scatter(row['Position'], row['Channel'], marker='*',color='red', s=1400, zorder=2)
-        # # Save the current plot as an image
-        # #plt.savefig(os.path.join(position_dir, f'plot_position_{sample_name}.png'))
-        # plt.savefig(position_dir+'/'+'@pos_@'+sample_name+'@'+file_num+'.png')
-
-
-        # print(position_dir+'/'+'@pos_@'+sample_name+'@'+file_num+'.png')
-        # plt.close()
-    
-        # print(f'File: {index+1} on {len(asso)} ')
